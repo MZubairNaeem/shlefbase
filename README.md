@@ -1,15 +1,17 @@
 # ShelfBase
 
-> NestJS-inspired backend framework for Dart, built on top of [Shelf](https://pub.dev/packages/shelf).
+> Laravel-inspired backend framework for Dart, built on top of [Shelf](https://pub.dev/packages/shelf).
 
-ShelfBase is **not** a thin wrapper around Shelf — it is a structured framework layer that gives you:
+ShelfBase brings Laravel's fluent routing, IoC container, middleware pipeline, and service-provider lifecycle to Dart server-side development — without reflection, without mirrors, fully AOT-safe.
 
-- **Modular architecture** — group controllers and services into self-contained modules
-- **Constructor-injected dependency injection** — explicit factory-based DI container (no mirrors, AOT-safe)
-- **Controller + route declaration** — pair `@Controller`/`@Get`/`@Post` annotations with an explicit route list
-- **Clean public API** — one import, then you're productive
-- **Shelf compatibility** — uses Shelf under the hood; any Shelf middleware works
-- **Code generator CLI** — `shelfbase generate resource users` scaffolds a complete feature slice
+- **Fluent router** — `get`, `post`, `put`, `patch`, `delete`, `any`, `resource`, nested `group`
+- **IoC container** — `bind`, `singleton`, `instance`, `make` — no reflection
+- **Service providers** — `register()` + `boot()` lifecycle, exactly like Laravel
+- **Middleware pipeline** — global, per-group, and per-route middleware stacks
+- **Rich Request/Response** — `request.param`, `request.query`, `request.jsonMap`, `Response.json`, etc.
+- **Resource controllers** — `router.resource('/users', UserController())` registers all 5 CRUD routes
+- **Artisan-style CLI** — `dart run shelfbase make:resource User` scaffolds a complete feature slice
+- **Shelf-native** — produces a standard Shelf `Handler`; any Shelf middleware works
 
 ---
 
@@ -18,10 +20,27 @@ ShelfBase is **not** a thin wrapper around Shelf — it is a structured framewor
 ```dart
 // main.dart
 import 'package:shelfbase/shelfbase.dart';
-import 'app.module.dart';
 
 void main() async {
-  final app = ShelfBase.create(AppModule());
+  final app = Application();
+
+  // Register services
+  app.singleton<UserService>((_) => UserService());
+
+  // Global middleware
+  app.use(LogMiddleware());
+
+  // Routes
+  app.router.get('/health', (req) => Response.json({'status': 'ok'}));
+
+  app.router.group(
+    prefix: '/api/v1',
+    middleware: [AuthMiddleware()],
+    routes: (r) {
+      r.resource('/users', UserController(app.make<UserService>()));
+    },
+  );
+
   await app.listen(port: 3000);
 }
 ```
@@ -35,37 +54,34 @@ lib/
 ├── shelfbase.dart               ← single public import
 └── src/
     ├── core/
-    │   ├── app.dart             ← ShelfBase (factory) + ShelfBaseApp (listen/close)
-    │   └── shelf_adapter.dart   ← converts RouteRegistry → Shelf Handler
-    ├── decorators/
-    │   ├── controller.dart      ← @Controller annotation
-    │   ├── http_methods.dart    ← @Get @Post @Put @Delete @Patch
-    │   └── module_annotation.dart ← @Module annotation
-    ├── di/
-    │   ├── container.dart       ← DIContainer (register / resolve / override)
-    │   └── provider.dart        ← Provider<T> (simple + withDeps factories)
+    │   ├── app.dart             ← Application: container + router + middleware + server
+    │   └── container.dart       ← IoC Container: bind / singleton / instance / make
     ├── http/
-    │   └── response_builder.dart ← Res.ok() Res.created() Res.notFound() …
-    ├── modules/
-    │   ├── shelf_base_module.dart     ← abstract ShelfBaseModule
-    │   ├── shelf_base_controller.dart ← abstract ShelfBaseController
-    │   ├── controller_factory.dart    ← ControllerFactory<T>
-    │   └── module_loader.dart         ← wires DI + routes, depth-first
-    └── router/
-        ├── route_entry.dart     ← RouteEntry (method + path + handler)
-        └── route_registry.dart  ← accumulates routes from controllers
+    │   ├── request.dart         ← Request: param / query / header / body / json
+    │   └── response.dart        ← Response: json / text / html / created / notFound …
+    ├── routing/
+    │   ├── route.dart           ← Route value object with tryMatch / name / url
+    │   ├── route_pattern.dart   ← RegExp-based URL matching and param extraction
+    │   └── router.dart          ← Router + ResourceController
+    ├── middleware/
+    │   ├── middleware.dart      ← Middleware interface + Next typedef
+    │   └── pipeline.dart        ← Pipeline.run(middleware, request, handler)
+    └── support/
+        ├── service_provider.dart ← ServiceProvider abstract (register + boot)
+        └── helpers.dart          ← app() / make<T>() / route(name) / env(key)
 ```
 
 ### Layer responsibilities
 
 | Layer | What it does |
 |---|---|
-| **Core** | Bootstraps the server, assembles the Shelf pipeline |
-| **Router** | Normalises and accumulates route records |
-| **DI** | Singleton-by-default factory container; no reflection |
-| **Modules** | Unit of organisation — groups providers + controllers |
-| **Decorators** | Cosmetic annotations (document intent; drive codegen in Phase 2) |
-| **HTTP utils** | `Res.*` helpers for common response shapes |
+| **Application** | Owns the container, router, global middleware, and HTTP server |
+| **Container** | Lazy singleton / transient factory registry; no reflection |
+| **Router** | First-match flat route list; regex named-group URL matching |
+| **Middleware** | Composable pipeline applied globally, per-group, or per-route |
+| **Request** | Wraps Shelf request; caches body; exposes ergonomic accessors |
+| **Response** | Immutable value object; serialises to Shelf response via `toShelf()` |
+| **ServiceProvider** | Two-phase boot: `register` binds services, `boot` starts them |
 
 ---
 
@@ -75,202 +91,370 @@ lib/
 
 ```dart
 class UserService {
-  List<Map<String, dynamic>> findAll() => [...];
-  Map<String, dynamic>? findOne(String id) => ...;
+  final _users = <String, Map<String, dynamic>>{};
+
+  List<Map<String, dynamic>> findAll() => _users.values.toList();
+
+  Map<String, dynamic>? findOne(String id) => _users[id];
+
+  Map<String, dynamic> create(String name, String email) {
+    final id = DateTime.now().millisecondsSinceEpoch.toString();
+    return _users[id] = {'id': id, 'name': name, 'email': email};
+  }
 }
 ```
 
 ### 2 — Write a controller
 
+For manually registered routes, any class or function works:
+
 ```dart
-@Controller('/users')
-class UserController extends ShelfBaseController {
+class UserController extends ResourceController {
   final UserService _service;
   UserController(this._service);
 
   @override
-  String get prefix => '/users';
-
-  @override
-  List<RouteEntry> get routes => [
-    RouteEntry.get('/',      _getAll),
-    RouteEntry.get('/<id>', _getOne),   // id passed as positional arg
-    RouteEntry.post('/',     _create),
-  ];
-
-  @Get('/')
-  Response _getAll(Request req) => Res.ok(_service.findAll());
-
-  @Get('/<id>')
-  Response _getOne(Request req, String id) {
-    final user = _service.findOne(id);
-    return user != null ? Res.ok(user) : Res.notFound('User $id not found');
+  Response index(Request request) {
+    final page = int.tryParse(request.query('page') ?? '1') ?? 1;
+    return Response.json({'data': _service.findAll(), 'page': page});
   }
 
-  @Post('/')
-  Future<Response> _create(Request req) async {
-    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
-    return Res.created(_service.create(body['name'], body['email']));
+  @override
+  Response show(Request request) {
+    final user = _service.findOne(request.param('id'));
+    return user != null
+        ? Response.json(user)
+        : Response.notFound('User not found');
+  }
+
+  @override
+  Future<Response> store(Request request) async {
+    final body = await request.jsonMap();
+    final name = body['name'] as String?;
+    final email = body['email'] as String?;
+    if (name == null || email == null) {
+      return Response.unprocessable({'name': ['required'], 'email': ['required']});
+    }
+    return Response.created(_service.create(name, email));
+  }
+
+  @override
+  Future<Response> update(Request request) async {
+    final body = await request.jsonMap();
+    final user = _service.update(request.param('id'), body);
+    return user != null ? Response.json(user) : Response.notFound('Not found');
+  }
+
+  @override
+  Response destroy(Request request) {
+    final removed = _service.delete(request.param('id'));
+    return removed ? Response.noContent() : Response.notFound('Not found');
   }
 }
 ```
 
-**Path parameter note** — shelf_router passes named URL segments (e.g. `<id>`) as positional arguments after `Request`. Match your handler signature to the route pattern, or use `request.params['id']` if you prefer to keep every handler `(Request) → Response`.
+`router.resource('/users', controller)` registers:
 
-### 3 — Declare a module
+```
+GET    /users         → controller.index
+GET    /users/<id>    → controller.show
+POST   /users         → controller.store
+PUT    /users/<id>    → controller.update
+PATCH  /users/<id>    → controller.update
+DELETE /users/<id>    → controller.destroy
+```
+
+### 3 — Register services with a provider
 
 ```dart
-@Module(controllers: [UserController], providers: [UserService])
-class UserModule extends ShelfBaseModule {
+class AppServiceProvider extends ServiceProvider {
   @override
-  List<Provider<dynamic>> get providers => [
-    Provider<UserService>(() => UserService()),
-  ];
+  void register() {
+    // bind<T> → new instance per make(); singleton<T> → shared instance
+    app.singleton<UserService>((_) => UserService());
+  }
 
   @override
-  List<ControllerFactory<dynamic>> get controllers => [
-    ControllerFactory<UserController>(
-      (c) => UserController(c.get<UserService>()),
-    ),
-  ];
+  Future<void> boot() async {
+    // Runs after all providers are registered — safe to call app.make<T>() here
+  }
 }
 ```
 
-### 4 — Compose the root module
-
-```dart
-class AppModule extends ShelfBaseModule {
-  @override
-  List<ShelfBaseModule> get imports => [UserModule()];
-}
-```
-
-### 5 — Boot
+### 4 — Compose and boot
 
 ```dart
 void main() async {
-  final app = ShelfBase.create(AppModule());
+  final app = Application();
+
+  app.register(AppServiceProvider());
+  app.use(LogMiddleware());
+
+  app.router.resource('/users', UserController(app.make<UserService>()));
+
   await app.listen(port: 3000);
 }
 ```
 
 ---
 
-## Dependency injection
-
-The `DIContainer` is a simple, AOT-safe factory registry.
+## IoC container
 
 ```dart
-// Register
-container.register<MyService>((_) => MyService(), singleton: true);
+// Transient — new instance on every make()
+app.bind<MyService>((_) => MyService());
+
+// Singleton — created once, reused forever
+app.singleton<MyService>((_) => MyService());
+
+// Pre-built instance
+app.instance<Config>(Config.fromEnv());
 
 // Resolve
-final svc = container.get<MyService>();
+final svc = app.make<MyService>();
 
-// Override (useful in tests)
-container.override<MyService>((_) => FakeMyService());
-```
+// Override in tests
+app.rebind<MyService>((_) => FakeMyService());
 
-`Provider<T>` wraps registration for use inside modules:
-
-```dart
-// No dependencies
-Provider<UserService>(() => UserService())
-
-// With dependencies resolved from the container
-Provider<OrderService>.withDeps((c) => OrderService(c.get<UserService>()))
+// Check if bound
+if (app.bound<MyService>()) { ... }
 ```
 
 ---
 
-## Response helpers (`Res`)
+## Routing
+
+### Verb methods
 
 ```dart
-Res.ok({'users': users})          // 200 application/json
-Res.created({'id': newId})        // 201
-Res.noContent()                   // 204
-Res.badRequest('name is required') // 400
-Res.unauthorized()                 // 401
-Res.forbidden()                    // 403
-Res.notFound('User not found')     // 404
-Res.serverError()                  // 500
+app.router.get('/path', handler);
+app.router.post('/path', handler);
+app.router.put('/path', handler);
+app.router.patch('/path', handler);
+app.router.delete('/path', handler);
+app.router.any('/path', handler);   // matches any HTTP method
+```
+
+### Route parameters
+
+Parameters are declared with `<name>` in the path and read via `request.param('name')`:
+
+```dart
+app.router.get('/users/<id>', (req) {
+  return Response.json({'id': req.param('id')});
+});
+```
+
+### Named routes and URL generation
+
+```dart
+app.router.get('/users/<id>', handler).name('users.show');
+
+// Later, generate the URL
+final url = route('users.show', {'id': '42'}); // → /users/42
+```
+
+### Route groups
+
+```dart
+app.router.group(
+  prefix: '/api/v1',
+  middleware: [AuthMiddleware()],
+  routes: (r) {
+    r.resource('/users', UserController());
+
+    r.group(prefix: '/admin', middleware: [AdminMiddleware()], routes: (r) {
+      r.get('/stats', StatsController.show);
+    });
+  },
+);
+```
+
+### Prefix shorthand
+
+```dart
+app.router.prefix('/api/v1').group((r) {
+  r.get('/users', UserController.index);
+});
 ```
 
 ---
 
-## How ShelfBase differs from raw Shelf
+## Middleware
+
+Implement the `Middleware` interface:
+
+```dart
+class AuthMiddleware implements Middleware {
+  @override
+  Future<Response> handle(Request request, Next next) async {
+    final token = request.bearerToken;
+    if (token == null) return Response.unauthorized();
+    return next(request);  // pass to the next middleware or handler
+  }
+}
+```
+
+Apply globally, per-group, or per-route:
+
+```dart
+// Global — every request
+app.use(LogMiddleware());
+
+// Per group
+app.router.group(middleware: [AuthMiddleware()], routes: (r) { ... });
+```
+
+---
+
+## Request API
+
+```dart
+// Route parameters  (/<id>)
+request.param('id')
+
+// Query string  (?page=2)
+request.query('page')
+request.queryAll         // Map<String, String>
+
+// Headers
+request.header('content-type')
+request.authorization    // Authorization header value
+request.bearerToken      // Bearer <token> extracted
+
+// Body
+await request.body()     // raw String (cached)
+await request.json()     // decoded dynamic
+await request.jsonMap()  // Map<String, dynamic>
+await request.input('name')  // single JSON key
+await request.form()     // URL-encoded form fields
+
+// Meta
+request.method           // 'GET', 'POST', …
+request.path             // '/users/42'
+request.uri              // full Uri
+request.isJson           // content-type check
+request.ip               // best-effort client IP
+```
+
+---
+
+## Response helpers
+
+```dart
+Response.json({'users': users})          // 200 application/json
+Response.json(data, status: 202)         // custom status
+Response.text('hello')                   // 200 text/plain
+Response.html('<h1>hi</h1>')             // 200 text/html
+Response.created({'id': newId})          // 201
+Response.noContent()                     // 204
+Response.redirect('/login')              // 302
+Response.redirect('/new', status: 301)   // 301 permanent
+
+Response.badRequest('name required')     // 400
+Response.unauthorized()                  // 401
+Response.forbidden()                     // 403
+Response.notFound('User not found')      // 404
+Response.methodNotAllowed()              // 405
+Response.conflict()                      // 409
+Response.unprocessable({'field': ['required']})  // 422
+Response.serverError()                   // 500
+
+// Chain headers
+Response.json(data).withHeader('X-Request-Id', id)
+Response.json(data).withStatus(202)
+```
+
+---
+
+## Helper functions
+
+```dart
+import 'package:shelfbase/shelfbase.dart';
+
+app()              // the Application singleton
+make<T>()          // shorthand for app().make<T>()
+route('name')      // URL for a named route (no params)
+route('name', {'id': '42'})   // URL with params
+env('DATABASE_URL')            // read environment variable
+env('PORT', fallback: '3000')  // with fallback
+envInt('PORT', fallback: 3000) // parsed as int
+```
+
+---
+
+## How ShelfBase compares
 
 | | Raw Shelf | ShelfBase |
 |---|---|---|
-| Routing | Manual `shelf_router` setup | Declared in controller classes |
-| DI | None | Explicit factory container |
-| Organisation | Single handler or ad-hoc | Modules → Controllers → Services |
-| Middleware | Pipeline | Same Shelf pipeline (fully compatible) |
-| Bootstrapping | `shelf_io.serve(handler, …)` | `ShelfBase.create(module).listen()` |
+| Routing | Manual `shelf_router` setup | Fluent `router.get/post/resource/group` |
+| DI | None | IoC container — `bind / singleton / make` |
+| Middleware | Shelf pipeline | Composable, stackable middleware classes |
+| Organisation | Ad-hoc | Service providers + resource controllers |
+| Bootstrapping | `shelf_io.serve(handler, …)` | `Application().listen()` |
 
-### How ShelfBase mirrors NestJS
+### Laravel concept mapping
 
-| NestJS | ShelfBase (Phase 1) |
+| Laravel | ShelfBase |
 |---|---|
-| `@Module({controllers, providers})` | Extend `ShelfBaseModule`, override getters |
-| `@Controller('/path')` | Cosmetic annotation + `get prefix => '/path'` |
-| `@Get('/')` | Cosmetic annotation + explicit `RouteEntry.get` |
-| `@Injectable()` service | `Provider<T>(() => T())` in module |
-| Constructor injection | `ControllerFactory<T>((c) => T(c.get<Dep>()))` |
-| `NestFactory.create(AppModule)` | `ShelfBase.create(AppModule())` |
-
-The Phase 1 gap (explicit factories vs magic reflection) will be closed by the source_gen code generator in Phase 2.
+| `Route::get('/path', fn)` | `app.router.get('/path', handler)` |
+| `Route::resource('users', UserController)` | `router.resource('/users', UserController())` |
+| `Route::group(['prefix' => '/api', 'middleware' => [AuthMiddleware::class]], fn)` | `router.group(prefix: '/api', middleware: [AuthMiddleware()], routes: (r) {...})` |
+| `ServiceProvider::register()` / `boot()` | `ServiceProvider.register()` / `boot()` |
+| `app()->bind(...)` | `app.bind<T>(...)` |
+| `app()->singleton(...)` | `app.singleton<T>(...)` |
+| `app()->make(T::class)` | `app.make<T>()` |
+| `$request->param('id')` | `request.param('id')` |
+| `$request->query('page')` | `request.query('page')` |
+| `response()->json(data)` | `Response.json(data)` |
 
 ---
 
 ## Roadmap
 
 ### Phase 1 — MVP ✅ (current)
-- Shelf adapter + request pipeline
-- `DIContainer` with singleton support
-- `ShelfBaseModule` / `ShelfBaseController` base classes
-- `ControllerFactory` explicit wiring
-- `RouteRegistry` + path normalisation
-- Cosmetic `@Controller` / `@Get` / `@Post` / … annotations
-- `Res.*` response helpers
-- Request logger middleware
-- **`shelfbase` CLI** — `generate module | service | controller | resource`
-  - Subdirectory paths (`api/v1/orders`)
-  - PascalCase / kebab-case / snake_case input normalisation
-  - `--flat`, `--dry-run`, `--force`, `--no-service` flags
+- `Application` class with IoC container, router, and HTTP server
+- `Container` — `bind / singleton / instance / make / rebind`
+- `ServiceProvider` — `register()` + `boot()` lifecycle
+- `Router` — verb methods, `resource`, nested `group`, named routes, URL generation
+- Custom regex URL matching — no `shelf_router` dependency
+- `Middleware` interface + composable `Pipeline`
+- `Request` wrapper — params, query, headers, body, cached parsing
+- `Response` value object — full set of factory helpers
+- `ResourceController` abstract class
+- **`shelfbase` CLI** — `make:controller | make:service | make:middleware | make:provider | make:resource`
+  - Suffix stripping (`UserController` → generates `UserController` class)
+  - `--flat`, `--dry-run` (`-d`), `--force` (`-f`), `--path` (`-p`) flags
   - SKIP guard on existing files
-- 27 unit tests
+- 61 unit tests
 
-### Phase 2 — Code generation (eliminating boilerplate)
+### Phase 2 — Code generation
 - `shelfbase_generator` package using `build_runner` + `source_gen`
-- Reads `@Module`, `@Controller`, `@Get`, `@Post`, … annotations at **build time**
-- Generates `*.shelfbase.dart` files with `Provider` + `ControllerFactory` registrations
-- Developer only writes annotations; no manual factory wiring needed
-- `@Injectable()` support for transitive provider discovery
+- Reads annotations at build time, generates binding registration code
+- Eliminates manual `singleton<T>` and factory wiring in providers
 
-### Phase 3 — Middleware system
-- `Guard` interface (pre-handler authorisation check)
-- `Interceptor` interface (pre/post handler transform — like NestJS interceptors)
-- `ExceptionFilter` for structured error responses
-- `Pipe` interface for request body validation/transformation
-- Global guard/interceptor registration via `app.useGlobalGuard(…)`
+### Phase 3 — Guards, interceptors, pipes
+- `Guard` interface — pre-handler authorisation checks
+- `Interceptor` — pre/post handler transform
+- `ExceptionFilter` — structured error response handling
+- `Pipe` — request body validation and transformation
+- Global registration via `app.useGlobalGuard(…)` etc.
 
 ### Phase 4 — Production readiness
-- `@Param`, `@Body`, `@Query`, `@Headers` parameter decorators (via codegen)
 - Scoped providers (request-scoped singletons)
 - Graceful shutdown hooks
-- Health check endpoint builder
+- Health check builder
 - `pub.dev` packaging (`shelfbase` + `shelfbase_generator`)
 - Full API documentation site
 
 ---
 
-## CLI — code generator
+## CLI — `make:*` generators
 
 ShelfBase ships a `shelfbase` executable that scaffolds files from templates,
-exactly like `nest generate` in NestJS.
+exactly like Laravel's `php artisan make:*`.
 
-### Installation (from your project)
+### Installation
 
 ```yaml
 # pubspec.yaml
@@ -279,58 +463,58 @@ dev_dependencies:
     path: /path/to/shelfbase   # or git/pub.dev when published
 ```
 
-Then run commands with:
-
-```bash
-dart run shelfbase:shelfbase <command> [options]
-```
-
 ### Commands
 
-| Command | Alias | What it creates |
+| Command | What it creates |
+|---|---|
+| `make:controller <Name>` | `<name>.controller.dart` with CRUD stubs |
+| `make:service <Name>` | `<name>.service.dart` with CRUD stubs |
+| `make:middleware <Name>` | `<name>.middleware.dart` |
+| `make:provider <Name>` | `<name>.provider.dart` |
+| `make:module <Name>` | `<name>.module.dart` registration function |
+| `make:resource <Name>` | All three files (service + controller + module), wired together |
+
+Names are normalised — `UserController`, `user-controller`, and `user_controller` all produce the same output. Suffixes are stripped automatically: `make:controller UserController` generates a class named `UserController`, not `UserControllerController`.
+
+### Options
+
+| Flag | Short | Description |
 |---|---|---|
-| `generate module <name>` | `g m` | Bare `<name>.module.dart` |
-| `generate service <name>` | `g s` | `<name>.service.dart` with CRUD stubs |
-| `generate controller <name>` | `g c` | `<name>.controller.dart` with 5 CRUD routes |
-| `generate resource <name>` | `g r` / `g res` | All three files wired together |
+| `--dry-run` | `-d` | Preview output without writing files |
+| `--force` | `-f` | Overwrite existing files |
+| `--flat` | | Write directly to `lib/` without a subdirectory |
+| `--path <dir>` | `-p` | Write into `lib/<dir>/` instead of `lib/<name>/` |
+| `--no-service` | | (controller only) Skip service import |
 
 ### Examples
 
 ```bash
 # Full CRUD slice — creates lib/users/{users.service,users.controller,users.module}.dart
-dart run shelfbase:shelfbase generate resource users
+dart run shelfbase make:resource User
 
-# Nested path — creates lib/api/v1/orders/{...}
-dart run shelfbase:shelfbase g resource api/v1/orders
+# Nested path
+dart run shelfbase make:resource Order --path api/v1/orders
 
-# PascalCase or kebab-case input — both work
-dart run shelfbase:shelfbase g resource UserProfile
-dart run shelfbase:shelfbase g resource user-profile
+# Standalone middleware
+dart run shelfbase make:middleware Auth
 
-# Standalone controller with no service import
-dart run shelfbase:shelfbase g controller health --no-service
-
-# Flat mode — writes directly to lib/ without creating a subdirectory
-dart run shelfbase:shelfbase g service auth --flat
-
-# Preview without writing (dry-run)
-dart run shelfbase:shelfbase g resource payments --dry-run
+# Preview without writing
+dart run shelfbase make:resource Payment --dry-run
 
 # Overwrite existing files
-dart run shelfbase:shelfbase g resource users --force
+dart run shelfbase make:resource User --force
 ```
 
-### Generated output (example: `g resource users`)
+### Generated output (example: `make:resource User`)
 
 ```
-  CREATE  lib/users/users.service.dart    (526 bytes)
-  CREATE  lib/users/users.controller.dart (1355 bytes)
-  CREATE  lib/users/users.module.dart     (566 bytes)
+  CREATE  lib/users/users.service.dart
+  CREATE  lib/users/users.controller.dart
+  CREATE  lib/users/users.module.dart
 ```
 
-`users.module.dart` is fully wired — the service is registered as a provider
-and the controller factory receives it via `c.get<UsersService>()`.
-Import it into your `AppModule.imports` and the routes are live.
+`users.module.dart` exports a `registerUsersModule(Application app)` function —
+call it in `main.dart` to bind the service and register routes.
 
 ---
 
@@ -345,12 +529,24 @@ dart run lib/main.dart
 Then:
 
 ```bash
-curl http://localhost:3000/users
-curl http://localhost:3000/users/1
-curl -X POST http://localhost:3000/users \
-     -H 'content-type: application/json' \
-     -d '{"name":"Carol","email":"carol@example.com"}'
-curl -X DELETE http://localhost:3000/users/1
+# Public endpoints
+curl http://localhost:3000/health
+curl http://localhost:3000/
+
+# Authenticated API (add Bearer token)
+curl http://localhost:3000/api/v1/users \
+     -H 'Authorization: Bearer secret-token'
+
+curl http://localhost:3000/api/v1/users/1 \
+     -H 'Authorization: Bearer secret-token'
+
+curl -X POST http://localhost:3000/api/v1/users \
+     -H 'Authorization: Bearer secret-token' \
+     -H 'Content-Type: application/json' \
+     -d '{"name":"Alice","email":"alice@example.com"}'
+
+curl -X DELETE http://localhost:3000/api/v1/users/1 \
+     -H 'Authorization: Bearer secret-token'
 ```
 
 ---
@@ -368,7 +564,7 @@ dart test
 > "Simple by default, extensible when you need it."
 
 - **No reflection** — works with AOT (Flutter, Dart Native). No `dart:mirrors`, no runtime scanning.
-- **Explicit over magic** — Phase 1 wiring is verbose on purpose. You see exactly what the framework does.
+- **Explicit over magic** — Phase 1 wiring is deliberate. You see exactly what the framework does.
 - **Incremental evolution** — each phase adds power without breaking the previous API.
-- **NestJS concepts, Dart idioms** — we borrow the *architecture* from NestJS, not the *syntax*.
-- **Shelf-native** — ShelfBase produces a standard Shelf `Handler`. You can mix it with any Shelf middleware.
+- **Laravel concepts, Dart idioms** — we borrow the *architecture* from Laravel, not the *syntax*.
+- **Shelf-native** — ShelfBase produces a standard Shelf `Handler`. Mix it with any Shelf middleware.
