@@ -1,0 +1,11 @@
+name: shelfbase_example
+description: Example application demonstrating ShelfBase framework usage.
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  shelfbase:
+    path: ../
+  shelf: ^1.4.0

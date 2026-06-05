@@ -1,0 +1,39 @@
+# Dart tool cache
+.dart_tool/
+.packages
+
+# Pub lock files
+# Omit for packages/frameworks (include for apps).
+# The example/ app has its own pubspec so its lock file is also excluded.
+pubspec.lock
+example/pubspec.lock
+
+# Build output
+build/
+
+# Coverage
+coverage/
+.coverage/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Dart compilation artefacts
+*.js
+*.js.map
+*.js.deps
+*.snapshot
