@@ -3,6 +3,7 @@ import 'package:shelfbase/shelfbase.dart';
 import '../database/migration_runner.dart';
 import '../database/migration_store.dart';
 import 'migrations/create_todos_table.dart';
+import 'todo_controller.dart';
 import 'todo_service.dart';
 
 class TodoProvider extends ServiceProvider {
@@ -18,5 +19,6 @@ class TodoProvider extends ServiceProvider {
 
     this.app.instance<MigrationStore>(_store);
     this.app.singleton<TodoService>((_) => TodoService(_store.table('todos')!));
+    this.app.singleton<TodoController>((c) => TodoController(c.make<TodoService>()));
   }
 }

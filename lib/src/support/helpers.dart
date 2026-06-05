@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 
 import '../core/app.dart';
+import '../http/request.dart';
 import '../routing/route.dart';
 
 // The helpers file holds the single shared application reference.
@@ -58,3 +59,22 @@ int envInt(String key, {int fallback = 0}) =>
 
 /// Returns the value of [Route] that was named [name], or `null`.
 Route? namedRoute(String name) => app().router.findByName(name);
+
+/// Resolves [T] from the IoC container on every request and dispatches to
+/// the controller method returned by [selector].
+///
+/// This is the Laravel-inspired `[Controller::class, 'method']` equivalent
+/// for ShelfBase. Register the controller type as a singleton in a
+/// [ServiceProvider] so the container can resolve it.
+///
+/// ```dart
+/// // routes/api.dart
+/// r.get('/todos',       use<TodoController>((c) => c.index));
+/// r.post('/todos',      use<TodoController>((c) => c.store));
+/// r.get('/todos/<id>',  use<TodoController>((c) => c.show));
+/// r.put('/todos/<id>',  use<TodoController>((c) => c.update));
+/// r.delete('/todos/<id>', use<TodoController>((c) => c.destroy));
+/// ```
+RouteHandler use<T>(RouteHandler Function(T) selector) {
+  return (Request req) => selector(make<T>())(req);
+}

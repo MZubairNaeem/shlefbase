@@ -2,6 +2,7 @@ import '../generator_context.dart';
 import 'controller_generator.dart';
 import 'generator_base.dart';
 import 'module_generator.dart';
+import 'routes_generator.dart';
 import 'service_generator.dart';
 
 /// Generates the full triad — service + controller + module — in one shot.
@@ -31,6 +32,7 @@ abstract final class ResourceGenerator {
       force: force,
       withResource: true,
     );
+    await RoutesGenerator.generate(ctx, dryRun: dryRun, force: force);
 
     GeneratorBase.printDone();
   }

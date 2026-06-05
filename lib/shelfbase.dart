@@ -25,4 +25,4 @@ export 'src/middleware/pipeline.dart' show Pipeline;
 
 // ── Support ────────────────────────────────────────────────────────────────
 export 'src/support/service_provider.dart' show ServiceProvider;
-export 'src/support/helpers.dart' show app, make, route, env, envInt;
+export 'src/support/helpers.dart' show app, make, route, env, envInt, use;
