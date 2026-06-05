@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:args/command_runner.dart';
 
+import 'commands/init_command.dart';
 import 'commands/make_commands.dart';
 import 'commands/serve_command.dart';
 
@@ -20,6 +21,7 @@ class CliRunner {
           'ShelfBase — Laravel-inspired Dart backend framework',
         ) {
     _runner
+      ..addCommand(InitCommand())
       ..addCommand(ServeCommand())
       ..addCommand(MakeControllerCommand())
       ..addCommand(MakeServiceCommand())

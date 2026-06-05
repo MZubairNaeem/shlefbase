@@ -63,8 +63,10 @@ ${argParser.usage}''';
     final entry = entryArg ?? _discoverEntry();
     if (entry == null) {
       stderr.writeln(
-        '\x1B[31merror:\x1B[0m No entry point found.\n'
-        '  Create \x1B[33mbin/main.dart\x1B[0m or pass \x1B[33m--entry <file>\x1B[0m.',
+        '\x1B[31merror:\x1B[0m No entry point found.\n\n'
+        '  Have you initialised the project yet?\n'
+        '  Run: \x1B[36mdart run shelfbase init\x1B[0m\n\n'
+        '  Or create \x1B[33mbin/main.dart\x1B[0m manually and re-run serve.',
       );
       return 1;
     }
