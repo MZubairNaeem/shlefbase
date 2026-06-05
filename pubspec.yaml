@@ -1,10 +1,12 @@
 name: shelfbase
 description: >
-  A NestJS-inspired backend framework built on top of Shelf for Dart.
-  Provides modular architecture, dependency injection, and a structured
-  controller/routing system.
+  Laravel-inspired backend framework for Dart, built on Shelf.
+  Fluent routing, IoC container, middleware pipeline, service providers,
+  Artisan-style CLI (init / serve / make:resource), and Laravel-style
+  controller-action dispatch — fully AOT-safe, no reflection.
 version: 0.1.0
-homepage: https://github.com/yourusername/shelfbase
+repository: https://github.com/MZubairNaeem/shlefbase
+issue_tracker: https://github.com/MZubairNaeem/shlefbase/issues
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
