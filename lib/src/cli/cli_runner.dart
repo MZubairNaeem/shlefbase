@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:args/command_runner.dart';
 
 import 'commands/make_commands.dart';
+import 'commands/serve_command.dart';
 
 /// Entry point for the ShelfBase CLI.
 ///
@@ -19,6 +20,7 @@ class CliRunner {
           'ShelfBase — Laravel-inspired Dart backend framework',
         ) {
     _runner
+      ..addCommand(ServeCommand())
       ..addCommand(MakeControllerCommand())
       ..addCommand(MakeServiceCommand())
       ..addCommand(MakeModuleCommand())
